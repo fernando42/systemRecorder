@@ -1,0 +1,39 @@
+[package]
+name = "system-recorder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+thiserror = "1"
+hound = "3.5"
+
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.34", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.34"
+windows-version = "0.1"
+# `windows` 的 #[implement] 宏展开后直接引用 `::windows_core::...`,
+# 需要这个 crate 作为顶层依赖,不能只靠 `windows` 的 re-export。
+windows-core = "0.62"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+    "Win32_Media_Audio",
+    "Win32_UI_Shell_PropertiesSystem",
+] }
+
+[profile.dev]
+opt-level = 1          # audio code is noticeably laggy at opt-level 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
