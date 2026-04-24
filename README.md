@@ -4,6 +4,8 @@
 
 本项目通过直接调用 Windows 核心音频 API (**WASAPI**) 实现，旨在提供高性能、低延迟的音频采集体验。
 
+![Software UI](assets/ui.png)
+
 ## 🚀 核心功能
 
 ### 1. 多样化的录音模式
