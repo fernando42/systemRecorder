@@ -6,6 +6,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use serde::{Deserialize, Serialize};
+use std::fs;
 
 use eframe::CreationContext;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, RichText};
@@ -16,6 +18,11 @@ use crate::wasapi::{
     devices::{EndpointDevice, EndpointFlow},
     sessions::{AudioSession, SessionState},
 };
+
+#[derive(Serialize, Deserialize)]
+struct AppConfig {
+    last_dir: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SourceKind {
@@ -66,6 +73,12 @@ impl RecorderApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
         install_cjk_font(&cc.egui_ctx);
 
+        let config_path = "config.json";
+        let last_dir = fs::read_to_string(config_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok())
+            .and_then(|cfg| cfg.last_dir);
+
         let mut app = Self {
             os_version: wasapi::os_version_string(),
             supports_per_process: wasapi::supports_process_loopback(),
@@ -76,9 +89,7 @@ impl RecorderApp {
             selected_input_id: None,
             selected_output_id: None,
             selected_pid: None,
-            output_path_buf: default_output_path(SourceKind::Mic.prefix())
-                .display()
-                .to_string(),
+            output_path_buf: last_dir.unwrap_or_else(|| ".".to_string()),
             recording: RecordingState::Idle,
         };
         app.refresh();
@@ -202,14 +213,21 @@ impl RecorderApp {
 
                 ui.separator();
                 ui.label("输出:");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.output_path_buf)
-                        .desired_width(320.0),
-                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.output_path_buf)
+                            .desired_width(240.0),
+                    );
+                    if ui.button("浏览...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_title("选择保存目录")
+                            .pick_folder() {
+                            self.output_path_buf = path.display().to_string();
+                        }
+                    }
+                });
                 if ui.button("重置").clicked() {
-                    self.output_path_buf = default_output_path(self.source_kind.prefix())
-                        .display()
-                        .to_string();
+                    self.output_path_buf = ".".to_string();
                 }
             });
         });
@@ -298,16 +316,28 @@ impl RecorderApp {
 
         match intent {
             Intent::None => {}
-            Intent::Start => {
-                if let Some(source) = pending_source {
-                    let path = PathBuf::from(self.output_path_buf.trim());
-                    let cap = WasapiCapture::start(source, path);
-                    self.recording = RecordingState::Active {
-                        capture: cap,
-                        started_at: Instant::now(),
-                    };
+                Intent::Start => {
+                    if let Some(source) = pending_source {
+                        let dir_str = self.output_path_buf.trim().to_string();
+                        let dir = PathBuf::from(&dir_str);
+                        
+                        // Generate the final file path: directory + timestamped filename
+                        let file_name = default_output_path(self.source_kind.prefix());
+                        let full_path = dir.join(file_name);
+
+                        // Persistence: save the last used directory
+                        let config = AppConfig { last_dir: Some(dir_str) };
+                        if let Ok(json) = serde_json::to_string(&config) {
+                            let _ = fs::write("config.json", json);
+                        }
+        
+                        let cap = WasapiCapture::start(source, full_path);
+                        self.recording = RecordingState::Active {
+                            capture: cap,
+                            started_at: Instant::now(),
+                        };
+                    }
                 }
-            }
             Intent::Stop => {
                 let prev = std::mem::replace(&mut self.recording, RecordingState::Idle);
                 if let RecordingState::Active { capture, .. } = prev {
