@@ -14,14 +14,37 @@ use egui::{Color32, FontData, FontDefinitions, FontFamily, RichText};
 
 use crate::wasapi::{
     self,
-    capture::{CaptureSource, CaptureStats, WasapiCapture, default_output_path},
+    capture::{CaptureSource, CaptureStats, WasapiCapture, NamingMode, SequenceType, generate_output_filename, default_output_path},
     devices::{EndpointDevice, EndpointFlow},
     sessions::{AudioSession, SessionState},
 };
 
+#[derive(Serialize, Deserialize, Clone)]
+struct NamingRule {
+    name: String,
+    mode: NamingMode,
+    current_sequence: usize,
+}
+
 #[derive(Serialize, Deserialize)]
 struct AppConfig {
     last_dir: Option<String>,
+    naming_rules: Vec<NamingRule>,
+    selected_rule_idx: usize,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            last_dir: None,
+            naming_rules: vec![NamingRule {
+                name: "默认 (来源+时间戳)".to_string(),
+                mode: NamingMode::Timestamped,
+                current_sequence: 0,
+            }],
+            selected_rule_idx: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,6 +70,10 @@ pub struct RecorderApp {
     input_devices: Result<Vec<EndpointDevice>, String>,
     output_devices: Result<Vec<EndpointDevice>, String>,
     sessions: Result<Vec<AudioSession>, String>,
+
+    // 命名规则配置
+    config: AppConfig,
+    show_naming_window: bool,
 
     // 录制状态
     source_kind: SourceKind,
@@ -74,10 +101,10 @@ impl RecorderApp {
         install_cjk_font(&cc.egui_ctx);
 
         let config_path = "config.json";
-        let last_dir = fs::read_to_string(config_path)
+        let config = fs::read_to_string(config_path)
             .ok()
             .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok())
-            .and_then(|cfg| cfg.last_dir);
+            .unwrap_or_default();
 
         let mut app = Self {
             os_version: wasapi::os_version_string(),
@@ -85,13 +112,19 @@ impl RecorderApp {
             input_devices: Ok(vec![]),
             output_devices: Ok(vec![]),
             sessions: Ok(vec![]),
+            config,
+            show_naming_window: false,
             source_kind: SourceKind::Mic,
             selected_input_id: None,
             selected_output_id: None,
             selected_pid: None,
-            output_path_buf: last_dir.unwrap_or_else(|| ".".to_string()),
+            output_path_buf: "".to_string(), // Initialized below
             recording: RecordingState::Idle,
         };
+
+        // Correctly initialize output_path_buf from config after 'app' is created
+        app.output_path_buf = app.config.last_dir.clone().unwrap_or_else(|| ".".to_string());
+        
         app.refresh();
         // 默认选系统默认的输入/输出
         if let Ok(list) = &app.input_devices
@@ -125,6 +158,132 @@ impl RecorderApp {
             self.recording = RecordingState::LastResult { path, outcome };
         }
     }
+
+    fn naming_window_ui(&mut self, ui: &mut egui::Ui) {
+        egui::Window::new("录音命名规则")
+            .open(&mut self.show_naming_window)
+            .resizable(false)
+            .default_width(400.0)
+            .show(ui.ctx(), |ui| {
+                ui.label("选择当前使用的规则:");
+                
+                let mut changed = false;
+                ui.horizontal_wrapped(|ui| {
+                    for (i, rule) in self.config.naming_rules.iter().enumerate() {
+                        if ui.radio_value(&mut self.config.selected_rule_idx, i, &rule.name).clicked() {
+                            changed = true;
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                if let Some(rule) = self.config.naming_rules.get_mut(self.config.selected_rule_idx) {
+                    ui.label(RichText::new("规则设置").strong());
+                    
+                    ui.horizontal(|ui| {
+                        ui.label("规则名称:");
+                        if ui.text_edit_singleline(&mut rule.name).changed() {
+                            changed = true;
+                        }
+                    });
+
+                    ui.separator();
+
+                    match &mut rule.mode {
+                        NamingMode::Timestamped => {
+                            ui.label("模式: 来源 + 时间戳 (例如: mic-20231027-103000.wav)");
+                            if ui.button("更改模式").clicked() {
+                                // This is a bit tricky in egui, we'll use a temporary state or just change it here
+                                // For simplicity, let's provide buttons to switch modes
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("改为固定名称").clicked() {
+                                    rule.mode = NamingMode::Fixed("recording".to_string());
+                                    changed = true;
+                                }
+                                if ui.button("改为自增序号").clicked() {
+                                    rule.mode = NamingMode::AutoIncrement { 
+                                        prefix: "".to_string(), 
+                                        sequence: SequenceType::Numeric 
+                                    };
+                                    changed = true;
+                                }
+                            });
+                        }
+                        NamingMode::Fixed(name) => {
+                            ui.label("模式: 固定名称");
+                            ui.horizontal(|ui| {
+                                ui.label("文件名:");
+                                if ui.text_edit_singleline(name).changed() {
+                                    changed = true;
+                                }
+                            });
+                            if ui.button("改为时间戳").clicked() {
+                                rule.mode = NamingMode::Timestamped;
+                                changed = true;
+                            }
+                        }
+                        NamingMode::AutoIncrement { prefix, sequence } => {
+                            ui.label("模式: 自动增量");
+                            ui.horizontal(|ui| {
+                                ui.label("前缀:");
+                                if ui.text_edit_singleline(prefix).changed() {
+                                    changed = true;
+                                }
+                            });
+                            
+                            ui.horizontal(|ui| {
+                                ui.label("序号类型:");
+                            if ui.radio_value(sequence, SequenceType::Numeric, "数字 (1,2,3)").clicked() {
+                                changed = true;
+                            }
+                            if ui.radio_value(sequence, SequenceType::AlphabeticLower, "小写字母 (a,b,c)").clicked() {
+                                changed = true;
+                            }
+                            if ui.radio_value(sequence, SequenceType::AlphabeticUpper, "大写字母 (A,B,C)").clicked() {
+                                changed = true;
+                            }
+                            });
+
+                            if ui.button("改为时间戳").clicked() {
+                                rule.mode = NamingMode::Timestamped;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("➕ 添加规则").clicked() {
+                        self.config.naming_rules.push(NamingRule {
+                            name: format!("新规则 {}", self.config.naming_rules.len()),
+                            mode: NamingMode::Timestamped,
+                            current_sequence: 0,
+                        });
+                        self.config.selected_rule_idx = self.config.naming_rules.len() - 1;
+                        changed = true;
+                    }
+
+                    if self.config.naming_rules.len() > 1 {
+                        if ui.button("🗑 删除选中").clicked() {
+                            self.config.naming_rules.remove(self.config.selected_rule_idx);
+                            if self.config.selected_rule_idx >= self.config.naming_rules.len() {
+                                self.config.selected_rule_idx = self.config.naming_rules.len() - 1;
+                            }
+                            changed = true;
+                        }
+                    }
+                });
+
+                if changed {
+                    if let Ok(json) = serde_json::to_string(&self.config) {
+                        let _ = fs::write("config.json", json);
+                    }
+                }
+            });
+        }
 
     fn record_panel_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
@@ -226,9 +385,14 @@ impl RecorderApp {
                         }
                     }
                 });
-                if ui.button("重置").clicked() {
-                    self.output_path_buf = ".".to_string();
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("重置路径").clicked() {
+                        self.output_path_buf = ".".to_string();
+                    }
+                    if ui.button("命名规则...").clicked() {
+                        self.show_naming_window = true;
+                    }
+                });
             });
         });
 
@@ -321,13 +485,30 @@ impl RecorderApp {
                         let dir_str = self.output_path_buf.trim().to_string();
                         let dir = PathBuf::from(&dir_str);
                         
-                        // Generate the final file path: directory + timestamped filename
-                        let file_name = default_output_path(self.source_kind.prefix());
-                        let full_path = dir.join(file_name);
+                        // Use the selected naming rule from config
+                        let rule_idx = self.config.selected_rule_idx;
+                        let rule = &self.config.naming_rules[rule_idx];
+                        
+                        // Handle sequence increment for AutoIncrement mode
+                        let override_idx = match &rule.mode {
+                            NamingMode::AutoIncrement { .. } => Some(rule.current_sequence + 1),
+                            _ => None,
+                        };
 
-                        // Persistence: save the last used directory
-                        let config = AppConfig { last_dir: Some(dir_str) };
-                        if let Ok(json) = serde_json::to_string(&config) {
+                        let full_path = generate_output_filename(
+                            self.source_kind.prefix(), 
+                            &rule.mode, 
+                            &dir,
+                            override_idx
+                        );
+
+                        // Update sequence and persist config
+                        if let NamingMode::AutoIncrement { .. } = &rule.mode {
+                            self.config.naming_rules[rule_idx].current_sequence += 1;
+                        }
+
+                        self.config.last_dir = Some(dir_str);
+                        if let Ok(json) = serde_json::to_string(&self.config) {
                             let _ = fs::write("config.json", json);
                         }
         
@@ -354,6 +535,10 @@ impl RecorderApp {
 impl eframe::App for RecorderApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_recording();
+
+        if self.show_naming_window {
+            self.naming_window_ui(ui);
+        }
         // 录制中每秒刷 4 次,以便计时器和状态实时更新
         if matches!(self.recording, RecordingState::Active { .. }) {
             ui.ctx().request_repaint_after(Duration::from_millis(250));
@@ -597,7 +782,7 @@ fn install_cjk_font(ctx: &egui::Context) {
         Arc::new(FontData::from_owned(bytes)), // TTC: index=0 默认即 Regular face
     );
     // 中文作为正文、等宽族的 **fallback**:ASCII 仍由默认字体渲染,遇到
-    // 无法显示的字形才回退到中文字体。
+    // 无显示字形才回退到中文字体。
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         fonts
             .families

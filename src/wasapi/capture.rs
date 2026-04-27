@@ -23,14 +23,14 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
+use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, SYSTEMTIME, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
-    IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
+    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
     IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
     PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
@@ -47,6 +47,21 @@ use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{GUID, HRESULT, HSTRING, IUnknown, Interface, PCWSTR, Ref, implement};
 
 use super::{Result, WasapiError};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SequenceType {
+    Numeric,        // 1, 2, 3...
+    AlphabeticLower, // a, b, c...
+    AlphabeticUpper, // A, B, C...
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NamingMode {
+    Timestamped,
+    Fixed(String),
+    AutoIncrement { prefix: String, sequence: SequenceType },
+}
+
 
 // 取自 mmreg.h,数值级 API 常年稳定。避免再开 windows crate 的 Multimedia /
 // KernelStreaming 两个 feature。
@@ -204,7 +219,96 @@ impl Drop for WasapiCapture {
     }
 }
 
-/// 生成默认输出文件名:`<prefix>-YYYYMMDD-HHMMSS.wav`(当前工作目录)。
+/// 根据配置和目录生成输出文件名。
+pub fn generate_output_filename(
+    prefix: &str, 
+    mode: &NamingMode, 
+    dir: &Path, 
+    override_idx: Option<usize>
+) -> PathBuf {
+    match mode {
+        NamingMode::Timestamped => {
+            let st: SYSTEMTIME = unsafe { GetLocalTime() };
+            let name = format!(
+                "{prefix}-{:04}{:02}{:02}-{:02}{:02}{:02}.wav",
+                st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond,
+            );
+            dir.join(name)
+        }
+        NamingMode::Fixed(name) => {
+            let filename = if name.ends_with(".wav") {
+                name.clone()
+            } else {
+                format!("{}.wav", name)
+            };
+            dir.join(filename)
+        }
+        NamingMode::AutoIncrement { prefix: custom_prefix, sequence } => {
+            let p = if custom_prefix.is_empty() { prefix } else { custom_prefix };
+            
+            let next_idx = if let Some(idx) = override_idx {
+                idx
+            } else {
+                // 扫描目录寻找最大的序号 (Fallback)
+                let mut max_idx = 0;
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if name.starts_with(p) && name.ends_with(".wav") {
+                                let core = &name[p.len()..name.len() - 4];
+                                if let Some(idx) = parse_sequence(core, *sequence) {
+                                    if idx > max_idx {
+                                        max_idx = idx;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                max_idx + 1
+            };
+
+            let seq_str = format_sequence(next_idx, *sequence);
+            dir.join(format!("{}_{}.wav", p, seq_str))
+        }
+    }
+}
+
+fn parse_sequence(s: &str, seq: SequenceType) -> Option<usize> {
+    match seq {
+        SequenceType::Numeric => s.parse::<usize>().ok(),
+        SequenceType::AlphabeticLower => {
+            if s.len() == 1 {
+                s.chars().next()?.to_digit(36).map(|d| d as usize)
+            } else {
+                None // Simplified: only handle single char for now, or expand to base-26
+            }
+        }
+        SequenceType::AlphabeticUpper => {
+            if s.len() == 1 {
+                s.chars().next()?.to_digit(36).map(|d| d as usize)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn format_sequence(idx: usize, seq: SequenceType) -> String {
+    match seq {
+        SequenceType::Numeric => idx.to_string(),
+        SequenceType::AlphabeticLower => {
+            let c = std::char::from_u32((b'a' as u32) + (idx - 1) as u32).unwrap_or('?');
+            c.to_string()
+        }
+        SequenceType::AlphabeticUpper => {
+            let c = std::char::from_u32((b'A' as u32) + (idx - 1) as u32).unwrap_or('?');
+            c.to_string()
+        }
+    }
+}
+
+/// 生成默认输出文件名: `<prefix>-YYYYMMDD-HHMMSS.wav`(当前工作目录)。
 pub fn default_output_path(prefix: &str) -> PathBuf {
     let st: SYSTEMTIME = unsafe { GetLocalTime() };
     PathBuf::from(format!(
@@ -433,7 +537,7 @@ fn pcm_format(sample_rate: u32, channels: u16, bits: u16) -> WAVEFORMATEX {
 }
 
 /// COM 回调:`ActivateAudioInterfaceAsync` 完成后把 event 置信号,让发起
-/// 线程继续。本对象可能被 COM 在任意线程触发,所以只存 raw handle(usize)。
+/// 线程继续。本对象可能在 COM 在任意线程触发,所以只存 raw handle(usize)。
 #[implement(IActivateAudioInterfaceCompletionHandler)]
 struct ActivateHandler {
     event: usize, // HANDLE.0 as usize;HANDLE 本身 !Send+!Sync
@@ -479,10 +583,10 @@ unsafe fn activate_process_loopback_client(
 
         // 手工组装 VT_BLOB PROPVARIANT,指向 AUDIOCLIENT_ACTIVATION_PARAMS。
         // 关键:包在 ManuallyDrop 里。PROPVARIANT 的 Drop 会调 PropVariantClear,
-        // 对 VT_BLOB 会 CoTaskMemFree(pBlobData);但我们的 pBlobData 指向的是
+        // 对于 VT_BLOB 会 CoTaskMemFree(pBlobData);但我们的 pBlobData 指向的是
         // **栈上的 `params`**,不是 COM 堆内存,走 CoTaskMemFree 会立刻 AV。
         // 既然 BLOB 数据本来就是栈上的,不需要任何清理,直接泄漏 PROPVARIANT
-        // 外壳即可——反正 VT_BLOB 里除了 pBlobData 没有其他需要释放的资源。
+        // 外壳即可——反正 VT_BLOB 里除了 pBlobData 没有其他资源。
         let mut pv: ManuallyDrop<PROPVARIANT> = ManuallyDrop::new(std::mem::zeroed());
         {
             let v00 = &mut *pv.Anonymous.Anonymous;
@@ -545,8 +649,7 @@ unsafe fn activate_process_loopback_client(
         })?;
         let client: IAudioClient = iunk.cast()?;
         diag!("activate_process_loopback: IAudioClient cast OK");
-        // 显式按序丢弃,每一步打 checkpoint,定位究竟哪次 Release 炸。
-        // 这些都是 COM 对象的 Release,顺序:iunk → async_op → handler。
+        // 显式按序丢弃,每一步打 checkpoint,定位 whichever Release 炸。
         drop(iunk);
         diag!("activate_process_loopback: iunk dropped");
         drop(async_op);
