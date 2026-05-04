@@ -188,6 +188,18 @@ impl RecorderApp {
         ui.add_space(8.0);
 
         ui.group(|ui| {
+            ui.label("实时降噪 (RNNoise)");
+            if ui.checkbox(&mut settings.enable_denoise, "启用").changed() {
+                changed = true;
+            }
+            if settings.enable_denoise {
+                ui.label(RichText::new("专业级 RNN 降噪，仅支持 48kHz").small().color(Color32::GRAY));
+            }
+        });
+
+        ui.add_space(8.0);
+
+        ui.group(|ui| {
             ui.label("噪声门 (静音背景噪音)");
             if ui.checkbox(&mut settings.enable_gate, "启用").changed() {
                 changed = true;

@@ -367,6 +367,14 @@ fn run_capture(
         let fmt = inspect_format(pformat)?;
         diag!("run_capture: format inspected -> {:?}", fmt);
 
+        if fmt.sample_rate != 48000 {
+            log::warn!(
+                "[{}] 当前采样率 {}Hz 不符合 RNNoise (48kHz) 的要求, 降噪效果可能会失真或失效",
+                source.log_tag(),
+                fmt.sample_rate
+            );
+        }
+
         // 流式参数随源类型而异:
         // - Mic / PerProcess: 事件驱动
         // - SystemLoopback: 轮询(MSDN: loopback + event 在 render endpoint 上
