@@ -4,7 +4,7 @@
 //! - 右上角"刷新"按钮
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -18,6 +18,7 @@ use crate::wasapi::{
     devices::{EndpointDevice, EndpointFlow},
     sessions::{AudioSession, SessionState},
 };
+use crate::dsp::DspSettings;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct NamingRule {
@@ -31,6 +32,7 @@ struct AppConfig {
     last_dir: Option<String>,
     naming_rules: Vec<NamingRule>,
     selected_rule_idx: usize,
+    dsp_settings: DspSettings,
 }
 
 impl Default for AppConfig {
@@ -43,6 +45,7 @@ impl Default for AppConfig {
                 current_sequence: 0,
             }],
             selected_rule_idx: 0,
+            dsp_settings: DspSettings::default(),
         }
     }
 }
@@ -74,6 +77,10 @@ pub struct RecorderApp {
     // 命名规则配置
     config: AppConfig,
     show_naming_window: bool,
+
+    // 音效增强设置
+    dsp_settings: Arc<RwLock<DspSettings>>,
+    show_dsp_window: bool,
 
     // 录制状态
     source_kind: SourceKind,
@@ -112,8 +119,10 @@ impl RecorderApp {
             input_devices: Ok(vec![]),
             output_devices: Ok(vec![]),
             sessions: Ok(vec![]),
+            dsp_settings: Arc::new(RwLock::new(config.dsp_settings.clone())),
             config,
             show_naming_window: false,
+            show_dsp_window: false,
             source_kind: SourceKind::Mic,
             selected_input_id: None,
             selected_output_id: None,
@@ -159,9 +168,79 @@ impl RecorderApp {
         }
     }
 
+    fn dsp_settings_ui(&mut self, ui: &mut egui::Ui) {
+        // Removed the header label as it's now in the window title
+        let mut settings = self.dsp_settings.write().unwrap();
+        let mut changed = false;
+        
+        ui.group(|ui| {
+            ui.label("高通滤波 (切除低频嗡嗡声)");
+            if ui.checkbox(&mut settings.enable_hpf, "启用").changed() {
+                changed = true;
+            }
+            if settings.enable_hpf {
+                if ui.add(egui::Slider::new(&mut settings.hpf_cutoff, 20.0..=500.0).text("截止频率 (Hz)")).changed() {
+                    changed = true;
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+
+        ui.group(|ui| {
+            ui.label("噪声门 (静音背景噪音)");
+            if ui.checkbox(&mut settings.enable_gate, "启用").changed() {
+                changed = true;
+            }
+            if settings.enable_gate {
+                if ui.add(egui::Slider::new(&mut settings.gate_threshold, 0.0..=0.1).text("阈值")).changed() {
+                    changed = true;
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+
+        ui.group(|ui| {
+            ui.label("简单压缩器 (防止爆音/增强人声)");
+            if ui.checkbox(&mut settings.enable_compressor, "启用").changed() {
+                changed = true;
+            }
+            if settings.enable_compressor {
+                if ui.add(egui::Slider::new(&mut settings.comp_threshold, 0.1..=1.0).text("阈值")).changed() {
+                    changed = true;
+                }
+                if ui.add(egui::Slider::new(&mut settings.comp_ratio, 1.0..=20.0).text("压缩比")).changed() {
+                    changed = true;
+                }
+            }
+        });
+
+        // 同步回 config 并持久化
+        if changed {
+            self.config.dsp_settings = settings.clone();
+            if let Ok(json) = serde_json::to_string(&self.config) {
+                let _ = fs::write("config.json", json);
+            }
+        }
+    }
+
+    fn dsp_window_ui(&mut self, ui: &mut egui::Ui) {
+        let mut is_open = self.show_dsp_window;
+        egui::Window::new("音效增强设置")
+            .open(&mut is_open)
+            .resizable(false)
+            .default_width(300.0)
+            .show(ui.ctx(), |ui| {
+                self.dsp_settings_ui(ui);
+            });
+        self.show_dsp_window = is_open;
+    }
+
     fn naming_window_ui(&mut self, ui: &mut egui::Ui) {
+        let mut is_open = self.show_naming_window;
         egui::Window::new("录音命名规则")
-            .open(&mut self.show_naming_window)
+            .open(&mut is_open)
             .resizable(false)
             .default_width(400.0)
             .show(ui.ctx(), |ui| {
@@ -283,7 +362,8 @@ impl RecorderApp {
                     }
                 }
             });
-        }
+        self.show_naming_window = is_open;
+    }
 
     fn record_panel_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
@@ -512,7 +592,7 @@ impl RecorderApp {
                             let _ = fs::write("config.json", json);
                         }
         
-                        let cap = WasapiCapture::start(source, full_path);
+                        let cap = WasapiCapture::start(source, full_path, self.dsp_settings.clone());
                         self.recording = RecordingState::Active {
                             capture: cap,
                             started_at: Instant::now(),
@@ -572,6 +652,16 @@ impl eframe::App for RecorderApp {
         });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("⚙ 音效设置").clicked() {
+                    self.show_dsp_window = !self.show_dsp_window;
+                }
+            });
+
+            if self.show_dsp_window {
+                self.dsp_window_ui(ui);
+            }
+
             ui.columns(3, |cols| {
                 device_column(
                     &mut cols[0],

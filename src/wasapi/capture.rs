@@ -17,7 +17,7 @@
 use std::mem::{ManuallyDrop, size_of};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -47,6 +47,7 @@ use windows::Win32::System::Variant::VT_BLOB;
 use windows::core::{GUID, HRESULT, HSTRING, IUnknown, Interface, PCWSTR, Ref, implement};
 
 use super::{Result, WasapiError};
+use crate::dsp::{DspProcessor, DspSettings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SequenceType {
@@ -150,22 +151,24 @@ pub struct WasapiCapture {
 
 impl WasapiCapture {
     /// 立即启动捕获线程,开始向 `output_path` 写 WAV。
-    pub fn start(source: CaptureSource, output_path: PathBuf) -> Self {
+    pub fn start(source: CaptureSource, output_path: PathBuf, dsp_settings: Arc<RwLock<DspSettings>>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_c = stop.clone();
         let path_c = output_path.clone();
+        let dsp_s = dsp_settings.clone();
         let thread_name = format!("wasapi-{}-capture", source.log_tag());
 
         let join = thread::Builder::new()
             .name(thread_name)
             .spawn(move || -> Result<CaptureStats> {
-                diag!("capture thread start: source={:?} path={}", source, path_c.display());
+                diag!("capture thread start: source={:?} path={}", 
+                       source, path_c.display());
                 // SAFETY: 一次 init,线程结束前一次 uninit,中间所有 WASAPI 调用合法。
                 unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()? };
                 // Rust panic 不会带进程下去,但 COM 路径上偶发的 SEH 异常会。
                 // 用 catch_unwind 兜住 Rust 侧,SEH 则由外层 diag 日志定位崩溃点。
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_capture(&source, &path_c, &stop_c)
+                    run_capture(&source, &path_c, &stop_c, &dsp_s)
                 }));
                 unsafe { CoUninitialize() };
                 match r {
@@ -348,6 +351,7 @@ fn run_capture(
     source: &CaptureSource,
     output_path: &Path,
     stop: &AtomicBool,
+    dsp_settings: &Arc<RwLock<DspSettings>>,
 ) -> Result<CaptureStats> {
     diag!("run_capture enter: source={:?}", source);
     unsafe {
@@ -419,6 +423,11 @@ fn run_capture(
         let mut writer = WavWriter::create(output_path, spec)?;
 
         audio_client.Start()?;
+        
+        // 初始化 DSP 处理器 - 使用当前快照
+        let initial_settings = dsp_settings.read().unwrap().clone();
+        let mut dsp = DspProcessor::new(initial_settings, fmt.sample_rate, fmt.channels);
+
         log::info!(
             "[{}] 开始录制 {} Hz / {} ch / {:?} → {}",
             source.log_tag(),
@@ -430,6 +439,11 @@ fn run_capture(
 
         let mut frames: u64 = 0;
         while !stop.load(Ordering::SeqCst) {
+            // 实时同步 DSP 设置
+            if let Ok(settings) = dsp_settings.try_read() {
+                dsp.update_settings(settings.clone());
+            }
+
             match event {
                 Some(e) => {
                     if WaitForSingleObject(e, 500) != WAIT_OBJECT_0 {
@@ -460,7 +474,14 @@ fn run_capture(
 
                 if num_frames > 0 {
                     let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
-                    write_frames(&mut writer, &fmt, pdata, num_frames as usize, silent)?;
+                    
+                    // 将数据转换为 f32 进行 DSP 处理
+                    let mut float_buffer = convert_to_float(&fmt, pdata, num_frames as usize, silent);
+                    
+                    // 应用 DSP (高通滤波, 噪声门, 压缩器)
+                    dsp.process_frame(&mut float_buffer);
+                    
+                    write_processed_frames(&mut writer, &fmt, &float_buffer)?;
                     frames += num_frames as u64;
                 }
                 capture_client.ReleaseBuffer(num_frames)?;
@@ -701,37 +722,42 @@ unsafe fn inspect_format(pformat: *const WAVEFORMATEX) -> Result<FormatInfo> {
     }
 }
 
-unsafe fn write_frames<W: std::io::Write + std::io::Seek>(
-    writer: &mut WavWriter<W>,
-    fmt: &FormatInfo,
-    pdata: *const u8,
-    num_frames: usize,
-    silent: bool,
-) -> Result<()> {
+fn convert_to_float(fmt: &FormatInfo, pdata: *const u8, num_frames: usize, silent: bool) -> Vec<f32> {
     let total = num_frames * fmt.channels as usize;
+    if silent {
+        return vec![0.0; total];
+    }
+
     match fmt.kind {
         PcmKind::Float32 => {
-            if silent {
-                for _ in 0..total {
-                    writer.write_sample(0.0_f32)?;
-                }
-            } else {
-                let src = unsafe { std::slice::from_raw_parts(pdata as *const f32, total) };
-                for s in src {
-                    writer.write_sample(*s)?;
-                }
+            unsafe {
+                std::slice::from_raw_parts(pdata as *const f32, total).to_vec()
             }
         }
         PcmKind::Int16 => {
-            if silent {
-                for _ in 0..total {
-                    writer.write_sample(0_i16)?;
-                }
-            } else {
-                let src = unsafe { std::slice::from_raw_parts(pdata as *const i16, total) };
-                for s in src {
-                    writer.write_sample(*s)?;
-                }
+            unsafe {
+                let src = std::slice::from_raw_parts(pdata as *const i16, total);
+                src.iter().map(|&s| s as f32 / 32768.0).collect()
+            }
+        }
+    }
+}
+
+fn write_processed_frames<W: std::io::Write + std::io::Seek>(
+    writer: &mut WavWriter<W>,
+    fmt: &FormatInfo,
+    buffer: &[f32],
+) -> Result<()> {
+    match fmt.kind {
+        PcmKind::Float32 => {
+            for &s in buffer {
+                writer.write_sample(s)?;
+            }
+        }
+        PcmKind::Int16 => {
+            for &s in buffer {
+                let sample = (s * 32767.0).clamp(-32768.0, 32767.0) as i16;
+                writer.write_sample(sample)?;
             }
         }
     }

@@ -7,6 +7,7 @@
 #[cfg(windows)]
 mod app;
 #[cfg(windows)]
+mod dsp;
 mod wasapi;
 
 #[cfg(windows)]
