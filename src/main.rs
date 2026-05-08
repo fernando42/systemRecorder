@@ -30,6 +30,8 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("system-recorder 只支持 Windows。请用 `cargo build --target x86_64-pc-windows-gnu` 交叉编译。");
+    eprintln!(
+        "system-recorder 只支持 Windows。请用 `cargo build --target x86_64-pc-windows-gnu` 交叉编译。"
+    );
     std::process::exit(1);
 }

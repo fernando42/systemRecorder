@@ -17,8 +17,8 @@
 use std::mem::{ManuallyDrop, size_of};
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -26,12 +26,12 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, SYSTEMTIME, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    ActivateAudioInterfaceAsync, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
-    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
+    IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
     PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVE_FORMAT_PCM, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
@@ -51,7 +51,7 @@ use crate::dsp::{DspProcessor, DspSettings};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SequenceType {
-    Numeric,        // 1, 2, 3...
+    Numeric,         // 1, 2, 3...
     AlphabeticLower, // a, b, c...
     AlphabeticUpper, // A, B, C...
 }
@@ -60,16 +60,17 @@ pub enum SequenceType {
 pub enum NamingMode {
     Timestamped,
     Fixed(String),
-    AutoIncrement { prefix: String, sequence: SequenceType },
+    AutoIncrement {
+        prefix: String,
+        sequence: SequenceType,
+    },
 }
-
 
 // 取自 mmreg.h,数值级 API 常年稳定。避免再开 windows crate 的 Multimedia /
 // KernelStreaming 两个 feature。
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
 const WAVE_FORMAT_EXTENSIBLE: u16 = 0xFFFE;
-const KSDATAFORMAT_SUBTYPE_PCM: GUID =
-    GUID::from_u128(0x0000_0001_0000_0010_8000_00aa_0038_9b71);
+const KSDATAFORMAT_SUBTYPE_PCM: GUID = GUID::from_u128(0x0000_0001_0000_0010_8000_00aa_0038_9b71);
 const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
     GUID::from_u128(0x0000_0003_0000_0010_8000_00aa_0038_9b71);
 
@@ -93,11 +94,7 @@ fn diag_to_file(msg: &str) {
     use std::fs::OpenOptions;
     use std::io::Write;
     let path = super::log_path();
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "[{:?}] {msg}", std::thread::current().id());
         let _ = f.flush();
     }
@@ -152,7 +149,11 @@ pub struct WasapiCapture {
 
 impl WasapiCapture {
     /// 立即启动捕获线程,开始向 `output_path` 写 WAV。
-    pub fn start(source: CaptureSource, output_path: PathBuf, dsp_settings: Arc<RwLock<DspSettings>>) -> Self {
+    pub fn start(
+        source: CaptureSource,
+        output_path: PathBuf,
+        dsp_settings: Arc<RwLock<DspSettings>>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_c = stop.clone();
         let path_c = output_path.clone();
@@ -162,8 +163,11 @@ impl WasapiCapture {
         let join = thread::Builder::new()
             .name(thread_name)
             .spawn(move || -> Result<CaptureStats> {
-                diag!("capture thread start: source={:?} path={}", 
-                       source, path_c.display());
+                diag!(
+                    "capture thread start: source={:?} path={}",
+                    source,
+                    path_c.display()
+                );
                 // SAFETY: 一次 init,线程结束前一次 uninit,中间所有 WASAPI 调用合法。
                 unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()? };
                 // Rust panic 不会带进程下去,但 COM 路径上偶发的 SEH 异常会。
@@ -225,10 +229,10 @@ impl Drop for WasapiCapture {
 
 /// 根据配置和目录生成输出文件名。
 pub fn generate_output_filename(
-    prefix: &str, 
-    mode: &NamingMode, 
-    dir: &Path, 
-    override_idx: Option<usize>
+    prefix: &str,
+    mode: &NamingMode,
+    dir: &Path,
+    override_idx: Option<usize>,
 ) -> PathBuf {
     match mode {
         NamingMode::Timestamped => {
@@ -247,9 +251,16 @@ pub fn generate_output_filename(
             };
             dir.join(filename)
         }
-        NamingMode::AutoIncrement { prefix: custom_prefix, sequence } => {
-            let p = if custom_prefix.is_empty() { prefix } else { custom_prefix };
-            
+        NamingMode::AutoIncrement {
+            prefix: custom_prefix,
+            sequence,
+        } => {
+            let p = if custom_prefix.is_empty() {
+                prefix
+            } else {
+                custom_prefix
+            };
+
             let next_idx = if let Some(idx) = override_idx {
                 idx
             } else {
@@ -322,9 +333,7 @@ fn format_alpha_base26(idx: usize, upper: bool) -> String {
 fn parse_sequence(s: &str, seq: SequenceType) -> Option<usize> {
     match seq {
         SequenceType::Numeric => s.parse::<usize>().ok(),
-        SequenceType::AlphabeticLower | SequenceType::AlphabeticUpper => {
-            parse_alpha_base26(s)
-        }
+        SequenceType::AlphabeticLower | SequenceType::AlphabeticUpper => parse_alpha_base26(s),
     }
 }
 
@@ -429,7 +438,11 @@ fn run_capture(
             None,
         );
         if let Err(e) = &init_hr {
-            diag!("run_capture: Initialize failed hr={:#010x} msg={}", e.code().0 as u32, e.message());
+            diag!(
+                "run_capture: Initialize failed hr={:#010x} msg={}",
+                e.code().0 as u32,
+                e.message()
+            );
         }
         init_hr?;
         diag!("run_capture: Initialize OK");
@@ -456,7 +469,7 @@ fn run_capture(
         let mut writer = WavWriter::create(output_path, spec)?;
 
         audio_client.Start()?;
-        
+
         // 初始化 DSP 处理器 - 使用当前快照
         let initial_settings = dsp_settings.read().unwrap().clone();
         let mut dsp = DspProcessor::new(initial_settings, fmt.sample_rate, fmt.channels);
@@ -497,23 +510,18 @@ fn run_capture(
                 let mut pdata: *mut u8 = ptr::null_mut();
                 let mut num_frames: u32 = 0;
                 let mut flags: u32 = 0;
-                capture_client.GetBuffer(
-                    &mut pdata,
-                    &mut num_frames,
-                    &mut flags,
-                    None,
-                    None,
-                )?;
+                capture_client.GetBuffer(&mut pdata, &mut num_frames, &mut flags, None, None)?;
 
                 if num_frames > 0 {
                     let silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
-                    
+
                     // 将数据转换为 f32 进行 DSP 处理
-                    let mut float_buffer = convert_to_float(&fmt, pdata, num_frames as usize, silent);
-                    
+                    let mut float_buffer =
+                        convert_to_float(&fmt, pdata, num_frames as usize, silent);
+
                     // 应用 DSP (高通滤波, 噪声门, 压缩器)
                     dsp.process_frame(&mut float_buffer);
-                    
+
                     write_processed_frames(&mut writer, &fmt, &float_buffer)?;
                     frames += num_frames as u64;
                 }
@@ -537,13 +545,10 @@ fn run_capture(
 }
 
 /// 按源类型拿到 `IAudioClient` + 对应的 WAVEFORMATEX 所有权。
-unsafe fn activate_audio_client(
-    source: &CaptureSource,
-) -> Result<(IAudioClient, FormatHolder)> {
+unsafe fn activate_audio_client(source: &CaptureSource) -> Result<(IAudioClient, FormatHolder)> {
     unsafe {
         match source {
-            CaptureSource::Mic { device_id }
-            | CaptureSource::SystemLoopback { device_id } => {
+            CaptureSource::Mic { device_id } | CaptureSource::SystemLoopback { device_id } => {
                 let enumerator: IMMDeviceEnumerator =
                     CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
                 let device: IMMDevice = enumerator.GetDevice(&HSTRING::from(device_id.as_str()))?;
@@ -606,10 +611,7 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for ActivateHandler_Impl {
     }
 }
 
-unsafe fn activate_process_loopback_client(
-    pid: u32,
-    include_tree: bool,
-) -> Result<IAudioClient> {
+unsafe fn activate_process_loopback_client(pid: u32, include_tree: bool) -> Result<IAudioClient> {
     diag!(
         "activate_process_loopback: pid={pid} include_tree={include_tree} \
          PARAMS size={}",
@@ -665,7 +667,9 @@ unsafe fn activate_process_loopback_client(
         );
         let async_op: IActivateAudioInterfaceAsyncOperation = match async_op_result {
             Ok(op) => {
-                diag!("activate_process_loopback: ActivateAudioInterfaceAsync returned OK (async pending)");
+                diag!(
+                    "activate_process_loopback: ActivateAudioInterfaceAsync returned OK (async pending)"
+                );
                 op
             }
             Err(e) => {
@@ -698,9 +702,8 @@ unsafe fn activate_process_loopback_client(
         );
         hr.ok()?;
 
-        let iunk = iface.ok_or_else(|| {
-            WasapiError::UnsupportedFormat("ActivateCompleted 未返回接口".into())
-        })?;
+        let iunk = iface
+            .ok_or_else(|| WasapiError::UnsupportedFormat("ActivateCompleted 未返回接口".into()))?;
         let client: IAudioClient = iunk.cast()?;
         diag!("activate_process_loopback: IAudioClient cast OK");
         // 显式按序丢弃,每一步打 checkpoint,定位 whichever Release 炸。
@@ -755,24 +758,25 @@ unsafe fn inspect_format(pformat: *const WAVEFORMATEX) -> Result<FormatInfo> {
     }
 }
 
-fn convert_to_float(fmt: &FormatInfo, pdata: *const u8, num_frames: usize, silent: bool) -> Vec<f32> {
+fn convert_to_float(
+    fmt: &FormatInfo,
+    pdata: *const u8,
+    num_frames: usize,
+    silent: bool,
+) -> Vec<f32> {
     let total = num_frames * fmt.channels as usize;
     if silent {
         return vec![0.0; total];
     }
 
     match fmt.kind {
-        PcmKind::Float32 => {
-            unsafe {
-                std::slice::from_raw_parts(pdata as *const f32, total).to_vec()
-            }
-        }
-        PcmKind::Int16 => {
-            unsafe {
-                let src = std::slice::from_raw_parts(pdata as *const i16, total);
-                src.iter().map(|&s| s as f32 / 32768.0).collect()
-            }
-        }
+        PcmKind::Float32 => unsafe {
+            std::slice::from_raw_parts(pdata as *const f32, total).to_vec()
+        },
+        PcmKind::Int16 => unsafe {
+            let src = std::slice::from_raw_parts(pdata as *const i16, total);
+            src.iter().map(|&s| s as f32 / 32768.0).collect()
+        },
     }
 }
 

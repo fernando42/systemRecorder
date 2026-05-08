@@ -2,8 +2,8 @@
 
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{
-    DEVICE_STATE_ACTIVE, EDataFlow, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
-    eCapture, eConsole, eRender,
+    DEVICE_STATE_ACTIVE, EDataFlow, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eCapture,
+    eConsole, eRender,
 };
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
 use windows::core::GUID;
@@ -19,7 +19,7 @@ const PKEY_DEVICE_FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
 
 #[derive(Debug, Clone)]
 pub struct EndpointDevice {
-    pub id: String,           // IMMDevice::GetId 返回的设备 ID(WASAPI 内部标识)
+    pub id: String,            // IMMDevice::GetId 返回的设备 ID(WASAPI 内部标识)
     pub friendly_name: String, // 用户可读名称,例如 "扬声器 (Realtek...)"
     pub is_default: bool,
     pub flow: EndpointFlow,
@@ -35,7 +35,11 @@ pub enum EndpointFlow {
 
 impl From<EDataFlow> for EndpointFlow {
     fn from(f: EDataFlow) -> Self {
-        if f == eCapture { Self::Capture } else { Self::Render }
+        if f == eCapture {
+            Self::Capture
+        } else {
+            Self::Render
+        }
     }
 }
 
@@ -80,7 +84,9 @@ fn enumerate(flow: EDataFlow) -> Result<Vec<EndpointDevice>> {
 unsafe fn device_id(dev: &IMMDevice) -> Result<String> {
     unsafe {
         let pwstr = dev.GetId()?;
-        let s = pwstr.to_string().map_err(|_| super::WasapiError::BadString)?;
+        let s = pwstr
+            .to_string()
+            .map_err(|_| super::WasapiError::BadString)?;
         windows::Win32::System::Com::CoTaskMemFree(Some(pwstr.0 as *const _));
         Ok(s)
     }
@@ -95,4 +101,3 @@ unsafe fn device_friendly_name(dev: &IMMDevice) -> Result<String> {
         Ok(s)
     }
 }
-

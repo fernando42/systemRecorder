@@ -3,23 +3,26 @@
 //! - 三列:输入设备、输出设备、音频会话
 //! - 右上角"刷新"按钮
 
+use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
-use std::fs;
 
 use eframe::CreationContext;
 use egui::{Color32, FontData, FontDefinitions, FontFamily, RichText};
 
+use crate::dsp::DspSettings;
 use crate::wasapi::{
     self,
-    capture::{CaptureSource, CaptureStats, WasapiCapture, NamingMode, SequenceType, generate_output_filename, default_output_path},
+    capture::{
+        CaptureSource, CaptureStats, NamingMode, SequenceType, WasapiCapture, default_output_path,
+        generate_output_filename,
+    },
+    config_path,
     devices::{EndpointDevice, EndpointFlow},
     sessions::{AudioSession, SessionState},
-    config_path,
 };
-use crate::dsp::DspSettings;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct NamingRule {
@@ -132,8 +135,12 @@ impl RecorderApp {
         };
 
         // Correctly initialize output_path_buf from config after 'app' is created
-        app.output_path_buf = app.config.last_dir.clone().unwrap_or_else(|| ".".to_string());
-        
+        app.output_path_buf = app
+            .config
+            .last_dir
+            .clone()
+            .unwrap_or_else(|| ".".to_string());
+
         app.refresh();
         // 默认选系统默认的输入/输出
         if let Ok(list) = &app.input_devices
@@ -150,10 +157,8 @@ impl RecorderApp {
     }
 
     fn refresh(&mut self) {
-        self.input_devices =
-            wasapi::devices::list_input_devices().map_err(|e| e.to_string());
-        self.output_devices =
-            wasapi::devices::list_output_devices().map_err(|e| e.to_string());
+        self.input_devices = wasapi::devices::list_input_devices().map_err(|e| e.to_string());
+        self.output_devices = wasapi::devices::list_output_devices().map_err(|e| e.to_string());
         self.sessions = wasapi::sessions::list_audio_sessions().map_err(|e| e.to_string());
     }
 
@@ -172,14 +177,20 @@ impl RecorderApp {
         // Removed the header label as it's now in the window title
         let mut settings = self.dsp_settings.write().unwrap();
         let mut changed = false;
-        
+
         ui.group(|ui| {
             ui.label("高通滤波 (切除低频嗡嗡声)");
             if ui.checkbox(&mut settings.enable_hpf, "启用").changed() {
                 changed = true;
             }
             if settings.enable_hpf {
-                if ui.add(egui::Slider::new(&mut settings.hpf_cutoff, 20.0..=500.0).text("截止频率 (Hz)")).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(&mut settings.hpf_cutoff, 20.0..=500.0)
+                            .text("截止频率 (Hz)"),
+                    )
+                    .changed()
+                {
                     changed = true;
                 }
             }
@@ -193,7 +204,11 @@ impl RecorderApp {
                 changed = true;
             }
             if settings.enable_denoise {
-                ui.label(RichText::new("专业级 RNN 降噪，仅支持 48kHz").small().color(Color32::GRAY));
+                ui.label(
+                    RichText::new("专业级 RNN 降噪，仅支持 48kHz")
+                        .small()
+                        .color(Color32::GRAY),
+                );
             }
         });
 
@@ -205,7 +220,10 @@ impl RecorderApp {
                 changed = true;
             }
             if settings.enable_gate {
-                if ui.add(egui::Slider::new(&mut settings.gate_threshold, 0.0..=0.1).text("阈值")).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut settings.gate_threshold, 0.0..=0.1).text("阈值"))
+                    .changed()
+                {
                     changed = true;
                 }
             }
@@ -215,62 +233,123 @@ impl RecorderApp {
 
         ui.group(|ui| {
             ui.label("简单压缩器 (防止爆音/增强人声)");
-            if ui.checkbox(&mut settings.enable_compressor, "启用").changed() {
+            if ui
+                .checkbox(&mut settings.enable_compressor, "启用")
+                .changed()
+            {
                 changed = true;
             }
             if settings.enable_compressor {
-                if ui.add(egui::Slider::new(&mut settings.comp_threshold, 0.1..=1.0).text("阈值")).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut settings.comp_threshold, 0.1..=1.0).text("阈值"))
+                    .changed()
+                {
                     changed = true;
                 }
-                if ui.add(egui::Slider::new(&mut settings.comp_ratio, 1.0..=20.0).text("压缩比")).changed() {
+                if ui
+                    .add(egui::Slider::new(&mut settings.comp_ratio, 1.0..=20.0).text("压缩比"))
+                    .changed()
+                {
                     changed = true;
                 }
             }
         });
-        
+
         ui.add_space(8.0);
-        
+
         // --- 人声增强设置 ---
         ui.group(|ui| {
-            ui.label(RichText::new("人声增强").strong().color(Color32::from_rgb(100, 200, 255)));
-            
+            ui.label(
+                RichText::new("人声增强")
+                    .strong()
+                    .color(Color32::from_rgb(100, 200, 255)),
+            );
+
             // AGC 设置
             ui.add_space(4.0);
             ui.label("自动增益控制 (AGC)");
-            if ui.checkbox(&mut settings.vocal_enhancement.enable_agc, "启用").changed() {
+            if ui
+                .checkbox(&mut settings.vocal_enhancement.enable_agc, "启用")
+                .changed()
+            {
                 changed = true;
             }
             if settings.vocal_enhancement.enable_agc {
-                if ui.add(egui::Slider::new(&mut settings.vocal_enhancement.agc_target_rms, 0.1..=0.8).text("目标电平")).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut settings.vocal_enhancement.agc_target_rms,
+                            0.1..=0.8,
+                        )
+                        .text("目标电平"),
+                    )
+                    .changed()
+                {
                     changed = true;
                 }
-                if ui.add(egui::Slider::new(&mut settings.vocal_enhancement.agc_max_gain_db, 0.0..=30.0).text("最大增益 (dB)")).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut settings.vocal_enhancement.agc_max_gain_db,
+                            0.0..=30.0,
+                        )
+                        .text("最大增益 (dB)"),
+                    )
+                    .changed()
+                {
                     changed = true;
                 }
-                ui.label(RichText::new("自动提升音量到目标电平").small().color(Color32::GRAY));
+                ui.label(
+                    RichText::new("自动提升音量到目标电平")
+                        .small()
+                        .color(Color32::GRAY),
+                );
             }
-            
+
             // 均衡器设置
             ui.add_space(4.0);
             ui.label("人声均衡器");
-            if ui.checkbox(&mut settings.vocal_enhancement.enable_eq, "启用").changed() {
+            if ui
+                .checkbox(&mut settings.vocal_enhancement.enable_eq, "启用")
+                .changed()
+            {
                 changed = true;
             }
             if settings.vocal_enhancement.enable_eq {
-                ui.label(RichText::new("增强人声频段 (300Hz-3.4kHz)").small().color(Color32::GRAY));
+                ui.label(
+                    RichText::new("增强人声频段 (300Hz-3.4kHz)")
+                        .small()
+                        .color(Color32::GRAY),
+                );
             }
-            
+
             // 限幅器设置
             ui.add_space(4.0);
             ui.label("限幅器");
-            if ui.checkbox(&mut settings.vocal_enhancement.enable_limiter, "启用").changed() {
+            if ui
+                .checkbox(&mut settings.vocal_enhancement.enable_limiter, "启用")
+                .changed()
+            {
                 changed = true;
             }
             if settings.vocal_enhancement.enable_limiter {
-                if ui.add(egui::Slider::new(&mut settings.vocal_enhancement.limiter_threshold_db, -3.0..=0.0).text("阈值 (dBFS)")).changed() {
+                if ui
+                    .add(
+                        egui::Slider::new(
+                            &mut settings.vocal_enhancement.limiter_threshold_db,
+                            -3.0..=0.0,
+                        )
+                        .text("阈值 (dBFS)"),
+                    )
+                    .changed()
+                {
                     changed = true;
                 }
-                ui.label(RichText::new("防止增益提升后出现失真").small().color(Color32::GRAY));
+                ui.label(
+                    RichText::new("防止增益提升后出现失真")
+                        .small()
+                        .color(Color32::GRAY),
+                );
             }
         });
 
@@ -303,11 +382,14 @@ impl RecorderApp {
             .default_width(400.0)
             .show(ui.ctx(), |ui| {
                 ui.label("选择当前使用的规则:");
-                
+
                 let mut changed = false;
                 ui.horizontal_wrapped(|ui| {
                     for (i, rule) in self.config.naming_rules.iter().enumerate() {
-                        if ui.radio_value(&mut self.config.selected_rule_idx, i, &rule.name).clicked() {
+                        if ui
+                            .radio_value(&mut self.config.selected_rule_idx, i, &rule.name)
+                            .clicked()
+                        {
                             changed = true;
                         }
                     }
@@ -315,9 +397,13 @@ impl RecorderApp {
 
                 ui.separator();
 
-                if let Some(rule) = self.config.naming_rules.get_mut(self.config.selected_rule_idx) {
+                if let Some(rule) = self
+                    .config
+                    .naming_rules
+                    .get_mut(self.config.selected_rule_idx)
+                {
                     ui.label(RichText::new("规则设置").strong());
-                    
+
                     ui.horizontal(|ui| {
                         ui.label("规则名称:");
                         if ui.text_edit_singleline(&mut rule.name).changed() {
@@ -340,9 +426,9 @@ impl RecorderApp {
                                     changed = true;
                                 }
                                 if ui.button("改为自增序号").clicked() {
-                                    rule.mode = NamingMode::AutoIncrement { 
-                                        prefix: "".to_string(), 
-                                        sequence: SequenceType::Numeric 
+                                    rule.mode = NamingMode::AutoIncrement {
+                                        prefix: "".to_string(),
+                                        sequence: SequenceType::Numeric,
                                     };
                                     changed = true;
                                 }
@@ -369,18 +455,35 @@ impl RecorderApp {
                                     changed = true;
                                 }
                             });
-                            
+
                             ui.horizontal(|ui| {
                                 ui.label("序号类型:");
-                            if ui.radio_value(sequence, SequenceType::Numeric, "数字 (1,2,3)").clicked() {
-                                changed = true;
-                            }
-                            if ui.radio_value(sequence, SequenceType::AlphabeticLower, "小写字母 (a,b,c)").clicked() {
-                                changed = true;
-                            }
-                            if ui.radio_value(sequence, SequenceType::AlphabeticUpper, "大写字母 (A,B,C)").clicked() {
-                                changed = true;
-                            }
+                                if ui
+                                    .radio_value(sequence, SequenceType::Numeric, "数字 (1,2,3)")
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
+                                if ui
+                                    .radio_value(
+                                        sequence,
+                                        SequenceType::AlphabeticLower,
+                                        "小写字母 (a,b,c)",
+                                    )
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
+                                if ui
+                                    .radio_value(
+                                        sequence,
+                                        SequenceType::AlphabeticUpper,
+                                        "大写字母 (A,B,C)",
+                                    )
+                                    .clicked()
+                                {
+                                    changed = true;
+                                }
                             });
 
                             if ui.button("改为时间戳").clicked() {
@@ -405,7 +508,9 @@ impl RecorderApp {
 
                     if self.config.naming_rules.len() > 1 {
                         if ui.button("🗑 删除选中").clicked() {
-                            self.config.naming_rules.remove(self.config.selected_rule_idx);
+                            self.config
+                                .naming_rules
+                                .remove(self.config.selected_rule_idx);
                             if self.config.selected_rule_idx >= self.config.naming_rules.len() {
                                 self.config.selected_rule_idx = self.config.naming_rules.len() - 1;
                             }
@@ -445,14 +550,8 @@ impl RecorderApp {
                 );
                 // per-process 需要 Win10 build 20348+;老版本不可选
                 ui.add_enabled_ui(self.supports_per_process, |ui| {
-                    ui.radio_value(
-                        &mut self.source_kind,
-                        SourceKind::PerProcess,
-                        "特定应用",
-                    )
-                    .on_disabled_hover_text(
-                        "需要 Windows 10 build 20348+ / Windows 11",
-                    );
+                    ui.radio_value(&mut self.source_kind, SourceKind::PerProcess, "特定应用")
+                        .on_disabled_hover_text("需要 Windows 10 build 20348+ / Windows 11");
                 });
                 // 切换源类型时,默认文件名前缀跟着换(除非用户已改过路径)
                 if prev != self.source_kind
@@ -469,8 +568,12 @@ impl RecorderApp {
                 match self.source_kind {
                     SourceKind::Mic => {
                         ui.label("设备:");
-                        let inputs =
-                            self.input_devices.as_ref().ok().cloned().unwrap_or_default();
+                        let inputs = self
+                            .input_devices
+                            .as_ref()
+                            .ok()
+                            .cloned()
+                            .unwrap_or_default();
                         device_combo(
                             ui,
                             "mic_picker",
@@ -497,14 +600,8 @@ impl RecorderApp {
                     }
                     SourceKind::PerProcess => {
                         ui.label("应用:");
-                        let sessions =
-                            self.sessions.as_ref().ok().cloned().unwrap_or_default();
-                        session_combo(
-                            ui,
-                            "process_picker",
-                            &sessions,
-                            &mut self.selected_pid,
-                        );
+                        let sessions = self.sessions.as_ref().ok().cloned().unwrap_or_default();
+                        session_combo(ui, "process_picker", &sessions, &mut self.selected_pid);
                     }
                 }
 
@@ -512,13 +609,13 @@ impl RecorderApp {
                 ui.label("输出:");
                 ui.horizontal(|ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.output_path_buf)
-                            .desired_width(240.0),
+                        egui::TextEdit::singleline(&mut self.output_path_buf).desired_width(240.0),
                     );
                     if ui.button("浏览...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .set_title("选择保存目录")
-                            .pick_folder() {
+                            .pick_folder()
+                        {
                             self.output_path_buf = path.display().to_string();
                         }
                     }
@@ -560,25 +657,20 @@ impl RecorderApp {
         };
 
         ui.horizontal(|ui| {
-            let can_start = pending_source.is_some()
-                && !self.output_path_buf.trim().is_empty();
+            let can_start = pending_source.is_some() && !self.output_path_buf.trim().is_empty();
 
             match &self.recording {
                 RecordingState::Idle | RecordingState::LastResult { .. } => {
-                    let btn = egui::Button::new(
-                        RichText::new("● 开始录制").color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(200, 60, 60));
+                    let btn = egui::Button::new(RichText::new("● 开始录制").color(Color32::WHITE))
+                        .fill(Color32::from_rgb(200, 60, 60));
                     if ui.add_enabled(can_start, btn).clicked() {
                         intent = Intent::Start;
                     }
                 }
                 RecordingState::Active { started_at, .. } => {
                     let elapsed = started_at.elapsed();
-                    let btn = egui::Button::new(
-                        RichText::new("■ 停止").color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(80, 130, 200));
+                    let btn = egui::Button::new(RichText::new("■ 停止").color(Color32::WHITE))
+                        .fill(Color32::from_rgb(80, 130, 200));
                     if ui.add(btn).clicked() {
                         intent = Intent::Stop;
                     }
@@ -618,45 +710,45 @@ impl RecorderApp {
 
         match intent {
             Intent::None => {}
-                Intent::Start => {
-                    if let Some(source) = pending_source {
-                        let dir_str = self.output_path_buf.trim().to_string();
-                        let dir = PathBuf::from(&dir_str);
-                        
-                        // Use the selected naming rule from config
-                        let rule_idx = self.config.selected_rule_idx;
-                        let rule = &self.config.naming_rules[rule_idx];
-                        
-                        // Handle sequence increment for AutoIncrement mode
-                        let override_idx = match &rule.mode {
-                            NamingMode::AutoIncrement { .. } => Some(rule.current_sequence + 1),
-                            _ => None,
-                        };
+            Intent::Start => {
+                if let Some(source) = pending_source {
+                    let dir_str = self.output_path_buf.trim().to_string();
+                    let dir = PathBuf::from(&dir_str);
 
-                        let full_path = generate_output_filename(
-                            self.source_kind.prefix(), 
-                            &rule.mode, 
-                            &dir,
-                            override_idx
-                        );
+                    // Use the selected naming rule from config
+                    let rule_idx = self.config.selected_rule_idx;
+                    let rule = &self.config.naming_rules[rule_idx];
 
-                        // Update sequence and persist config
-                        if let NamingMode::AutoIncrement { .. } = &rule.mode {
-                            self.config.naming_rules[rule_idx].current_sequence += 1;
-                        }
+                    // Handle sequence increment for AutoIncrement mode
+                    let override_idx = match &rule.mode {
+                        NamingMode::AutoIncrement { .. } => Some(rule.current_sequence + 1),
+                        _ => None,
+                    };
 
-                        self.config.last_dir = Some(dir_str);
-                        if let Ok(json) = serde_json::to_string(&self.config) {
-                            let _ = fs::write(config_path(), json);
-                        }
-        
-                        let cap = WasapiCapture::start(source, full_path, self.dsp_settings.clone());
-                        self.recording = RecordingState::Active {
-                            capture: cap,
-                            started_at: Instant::now(),
-                        };
+                    let full_path = generate_output_filename(
+                        self.source_kind.prefix(),
+                        &rule.mode,
+                        &dir,
+                        override_idx,
+                    );
+
+                    // Update sequence and persist config
+                    if let NamingMode::AutoIncrement { .. } = &rule.mode {
+                        self.config.naming_rules[rule_idx].current_sequence += 1;
                     }
+
+                    self.config.last_dir = Some(dir_str);
+                    if let Ok(json) = serde_json::to_string(&self.config) {
+                        let _ = fs::write(config_path(), json);
+                    }
+
+                    let cap = WasapiCapture::start(source, full_path, self.dsp_settings.clone());
+                    self.recording = RecordingState::Active {
+                        capture: cap,
+                        started_at: Instant::now(),
+                    };
                 }
+            }
             Intent::Stop => {
                 let prev = std::mem::replace(&mut self.recording, RecordingState::Idle);
                 if let RecordingState::Active { capture, .. } = prev {
@@ -761,31 +853,33 @@ fn device_column(
             ui.label("(无)");
         }
         Ok(list) => {
-            egui::ScrollArea::vertical().id_salt(scroll_id).show(ui, |ui| {
-                for d in list {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(&d.friendly_name);
-                            if d.is_default {
-                                ui.label(
-                                    RichText::new("默认")
-                                        .small()
-                                        .color(Color32::from_rgb(100, 180, 255)),
-                                );
-                            }
+            egui::ScrollArea::vertical()
+                .id_salt(scroll_id)
+                .show(ui, |ui| {
+                    for d in list {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(&d.friendly_name);
+                                if d.is_default {
+                                    ui.label(
+                                        RichText::new("默认")
+                                            .small()
+                                            .color(Color32::from_rgb(100, 180, 255)),
+                                    );
+                                }
+                            });
+                            let flow = match d.flow {
+                                EndpointFlow::Render => "render",
+                                EndpointFlow::Capture => "capture",
+                            };
+                            ui.label(
+                                RichText::new(format!("{flow} · {}", d.id))
+                                    .small()
+                                    .color(Color32::GRAY),
+                            );
                         });
-                        let flow = match d.flow {
-                            EndpointFlow::Render => "render",
-                            EndpointFlow::Capture => "capture",
-                        };
-                        ui.label(
-                            RichText::new(format!("{flow} · {}", d.id))
-                                .small()
-                                .color(Color32::GRAY),
-                        );
-                    });
-                }
-            });
+                    }
+                });
         }
     }
 }
@@ -813,25 +907,27 @@ fn session_column(
             ui.label("(无正在使用的音频会话)");
         }
         Ok(list) => {
-            egui::ScrollArea::vertical().id_salt(scroll_id).show(ui, |ui| {
-                for s in list {
-                    ui.group(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(s.best_label());
-                            ui.label(state_tag(s.state));
+            egui::ScrollArea::vertical()
+                .id_salt(scroll_id)
+                .show(ui, |ui| {
+                    for s in list {
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(s.best_label());
+                                ui.label(state_tag(s.state));
+                            });
+                            let subtitle = ui.label(
+                                RichText::new(format!("PID {}", s.pid))
+                                    .small()
+                                    .color(Color32::GRAY),
+                            );
+                            // 完整路径放 hover 提示,避免长路径撑爆窄列
+                            if !s.exe_path.is_empty() {
+                                subtitle.on_hover_text(&s.exe_path);
+                            }
                         });
-                        let subtitle = ui.label(
-                            RichText::new(format!("PID {}", s.pid))
-                                .small()
-                                .color(Color32::GRAY),
-                        );
-                        // 完整路径放 hover 提示,避免长路径撑爆窄列
-                        if !s.exe_path.is_empty() {
-                            subtitle.on_hover_text(&s.exe_path);
-                        }
-                    });
-                }
-            });
+                    }
+                });
         }
     }
 }
@@ -859,10 +955,7 @@ fn session_combo(
         .width(260.0)
         .show_ui(ui, |ui| {
             if usable.is_empty() {
-                ui.label(
-                    RichText::new("(当前无可录的进程音频会话)")
-                        .color(Color32::GRAY),
-                );
+                ui.label(RichText::new("(当前无可录的进程音频会话)").color(Color32::GRAY));
             }
             for s in usable {
                 ui.selectable_value(
@@ -916,9 +1009,10 @@ fn install_cjk_font(ctx: &egui::Context) {
         r"C:\Windows\Fonts\simhei.ttf", // 中易黑体
     ];
 
-    let Some((path, bytes)) = CANDIDATES.iter().find_map(|p| {
-        std::fs::read(p).ok().map(|b| (*p, b))
-    }) else {
+    let Some((path, bytes)) = CANDIDATES
+        .iter()
+        .find_map(|p| std::fs::read(p).ok().map(|b| (*p, b)))
+    else {
         log::warn!("未找到任何系统中文字体,CJK 字符将显示为方块");
         return;
     };
@@ -943,14 +1037,12 @@ fn install_cjk_font(ctx: &egui::Context) {
 
 fn state_tag(state: SessionState) -> RichText {
     match state {
-        SessionState::Active => {
-            RichText::new("active").small().color(Color32::from_rgb(80, 200, 120))
-        }
-        SessionState::Inactive => {
-            RichText::new("inactive").small().color(Color32::GRAY)
-        }
-        SessionState::Expired => {
-            RichText::new("expired").small().color(Color32::from_rgb(180, 100, 100))
-        }
+        SessionState::Active => RichText::new("active")
+            .small()
+            .color(Color32::from_rgb(80, 200, 120)),
+        SessionState::Inactive => RichText::new("inactive").small().color(Color32::GRAY),
+        SessionState::Expired => RichText::new("expired")
+            .small()
+            .color(Color32::from_rgb(180, 100, 100)),
     }
 }

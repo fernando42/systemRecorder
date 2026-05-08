@@ -10,11 +10,11 @@ pub mod capture;
 pub mod devices;
 pub mod sessions;
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
-use std::fs;
 
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 

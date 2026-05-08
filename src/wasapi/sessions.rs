@@ -20,7 +20,7 @@ use super::{Result, WasapiError, run_on_mta};
 #[derive(Debug, Clone)]
 pub struct AudioSession {
     pub pid: u32,
-    pub exe_path: String, // 完整 exe 路径(拿不到时为空字符串)
+    pub exe_path: String,     // 完整 exe 路径(拿不到时为空字符串)
     pub display_name: String, // SetDisplayName 提供的友好名;多数 App 不会设,会是空
     pub state: SessionState,
     pub is_system_sounds: bool, // Windows 的系统提示音会话
@@ -115,7 +115,8 @@ fn enumerate_sessions() -> Result<Vec<AudioSession>> {
         out.sort_by(|a, b| {
             let sa = a.state as u8;
             let sb = b.state as u8;
-            sa.cmp(&sb).then_with(|| a.best_label().cmp(&b.best_label()))
+            sa.cmp(&sb)
+                .then_with(|| a.best_label().cmp(&b.best_label()))
         });
 
         Ok(out)
