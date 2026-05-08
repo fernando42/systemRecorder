@@ -4,18 +4,13 @@
 use serde::{Deserialize, Serialize};
 
 /// 均衡器预设
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum EqPreset {
+    #[default]
     VocalEnhance, // 人声增强
-    Broadcast,    // 广播
-    Phone,        // 电话
-    Custom,       // 自定义
-}
-
-impl Default for EqPreset {
-    fn default() -> Self {
-        EqPreset::VocalEnhance
-    }
+    Broadcast, // 广播
+    Phone,     // 电话
+    Custom,    // 自定义
 }
 
 /// 均衡器频段参数
@@ -258,22 +253,22 @@ impl DspProcessor {
             let dt = 1.0 / self.sample_rate;
             let alpha = rc / (rc + dt);
 
-            for i in 0..data.len() {
+            for (i, sample) in data.iter_mut().enumerate() {
                 let ch = i % channels;
-                let x = data[i];
+                let x = *sample;
                 let y = alpha * (self.hpf_prev_y[ch] + x - self.hpf_prev_x[ch]);
                 self.hpf_prev_x[ch] = x;
                 self.hpf_prev_y[ch] = y;
-                data[i] = y;
+                *sample = y;
             }
         }
 
         // --- 阶段 2: RNNoise 实时降噪 (块处理) ---
         if self.settings.enable_denoise {
             // 1. 将输入数据分发到各通道缓冲
-            for i in 0..data.len() {
+            for (i, sample) in data.iter().enumerate() {
                 let ch = i % channels;
-                self.input_buffers[ch].push(data[i]);
+                self.input_buffers[ch].push(*sample);
             }
 
             // 2. 处理所有满 480 采样的块
@@ -281,9 +276,7 @@ impl DspProcessor {
                 while self.input_buffers[ch].len() >= 480 {
                     let mut frame = [0.0f32; 480];
                     // 取出前 480 个采样
-                    for j in 0..480 {
-                        frame[j] = self.input_buffers[ch][j];
-                    }
+                    frame.copy_from_slice(&self.input_buffers[ch][..480]);
 
                     let mut out_frame = [0.0f32; 480];
                     self.denoisers[ch].process_frame(&mut out_frame, &frame);
@@ -298,10 +291,10 @@ impl DspProcessor {
 
             // 3. 用输出缓冲尝试覆盖当前 data (延迟生效)
             // 为了保持实时流长度不变，我们从 output_buffers 中提取相同数量的采样。
-            for i in 0..data.len() {
+            for (i, sample) in data.iter_mut().enumerate() {
                 let ch = i % channels;
                 if !self.output_buffers[ch].is_empty() {
-                    data[i] = self.output_buffers[ch].remove(0);
+                    *sample = self.output_buffers[ch].remove(0);
                 }
                 // 如果输出缓冲不足，则保留原值（或静音)，但由于是录制且延迟固定，通常能填满。
             }
@@ -395,9 +388,9 @@ impl DspProcessor {
 
         // --- 阶段 6: 均衡器 (EQ) ---
         if self.settings.vocal_enhancement.enable_eq {
-            for i in 0..data.len() {
+            for (i, dest) in data.iter_mut().enumerate() {
                 let ch = i % channels;
-                let mut sample = data[i];
+                let mut sample = *dest;
 
                 // 通过每个均衡器频段
                 for filter in self.eq_filters[ch].iter_mut() {
@@ -413,7 +406,7 @@ impl DspProcessor {
                     sample = y;
                 }
 
-                data[i] = sample;
+                *dest = sample;
             }
         }
 
@@ -422,14 +415,14 @@ impl DspProcessor {
             let threshold_db = self.settings.vocal_enhancement.limiter_threshold_db;
             let threshold_linear = 10.0_f32.powf(threshold_db / 20.0);
 
-            for i in 0..data.len() {
-                let sample = data[i];
-                let abs_sample = sample.abs();
+            for sample in data.iter_mut() {
+                let val = *sample;
+                let abs_val = val.abs();
 
                 // 简单的硬限幅
-                if abs_sample > threshold_linear {
-                    let sign = sample.signum();
-                    data[i] = sign * threshold_linear;
+                if abs_val > threshold_linear {
+                    let sign = val.signum();
+                    *sample = sign * threshold_linear;
                 }
             }
         }

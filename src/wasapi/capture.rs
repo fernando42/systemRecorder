@@ -268,14 +268,15 @@ pub fn generate_output_filename(
                 let mut max_idx = 0;
                 if let Ok(entries) = std::fs::read_dir(dir) {
                     for entry in entries.flatten() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            if name.starts_with(p) && name.ends_with(".wav") {
-                                let core = &name[p.len()..name.len() - 4];
-                                if let Some(idx) = parse_sequence(core, *sequence) {
-                                    if idx > max_idx {
-                                        max_idx = idx;
-                                    }
-                                }
+                        if let Some(name) = entry.file_name().to_str()
+                            && name.starts_with(p)
+                            && name.ends_with(".wav")
+                        {
+                            let core = &name[p.len()..name.len() - 4];
+                            if let Some(idx) = parse_sequence(core, *sequence)
+                                && idx > max_idx
+                            {
+                                max_idx = idx;
                             }
                         }
                     }

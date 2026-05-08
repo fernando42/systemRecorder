@@ -183,16 +183,15 @@ impl RecorderApp {
             if ui.checkbox(&mut settings.enable_hpf, "启用").changed() {
                 changed = true;
             }
-            if settings.enable_hpf {
-                if ui
+            if settings.enable_hpf
+                && ui
                     .add(
                         egui::Slider::new(&mut settings.hpf_cutoff, 20.0..=500.0)
                             .text("截止频率 (Hz)"),
                     )
                     .changed()
-                {
-                    changed = true;
-                }
+            {
+                changed = true;
             }
         });
 
@@ -219,13 +218,12 @@ impl RecorderApp {
             if ui.checkbox(&mut settings.enable_gate, "启用").changed() {
                 changed = true;
             }
-            if settings.enable_gate {
-                if ui
+            if settings.enable_gate
+                && ui
                     .add(egui::Slider::new(&mut settings.gate_threshold, 0.0..=0.1).text("阈值"))
                     .changed()
-                {
-                    changed = true;
-                }
+            {
+                changed = true;
             }
         });
 
@@ -506,23 +504,20 @@ impl RecorderApp {
                         changed = true;
                     }
 
-                    if self.config.naming_rules.len() > 1 {
-                        if ui.button("🗑 删除选中").clicked() {
-                            self.config
-                                .naming_rules
-                                .remove(self.config.selected_rule_idx);
-                            if self.config.selected_rule_idx >= self.config.naming_rules.len() {
-                                self.config.selected_rule_idx = self.config.naming_rules.len() - 1;
-                            }
-                            changed = true;
+                    if self.config.naming_rules.len() > 1 && ui.button("🗑 删除选中").clicked()
+                    {
+                        self.config
+                            .naming_rules
+                            .remove(self.config.selected_rule_idx);
+                        if self.config.selected_rule_idx >= self.config.naming_rules.len() {
+                            self.config.selected_rule_idx = self.config.naming_rules.len() - 1;
                         }
+                        changed = true;
                     }
                 });
 
-                if changed {
-                    if let Ok(json) = serde_json::to_string(&self.config) {
-                        let _ = fs::write(config_path(), json);
-                    }
+                if changed && let Ok(json) = serde_json::to_string(&self.config) {
+                    let _ = fs::write(config_path(), json);
                 }
             });
         self.show_naming_window = is_open;
@@ -611,13 +606,12 @@ impl RecorderApp {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.output_path_buf).desired_width(240.0),
                     );
-                    if ui.button("浏览...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
+                    if ui.button("浏览...").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
                             .set_title("选择保存目录")
                             .pick_folder()
-                        {
-                            self.output_path_buf = path.display().to_string();
-                        }
+                    {
+                        self.output_path_buf = path.display().to_string();
                     }
                 });
                 ui.horizontal(|ui| {
