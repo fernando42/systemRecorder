@@ -92,10 +92,11 @@ macro_rules! diag {
 fn diag_to_file(msg: &str) {
     use std::fs::OpenOptions;
     use std::io::Write;
+    let path = super::log_path();
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("system-recorder.log")
+        .open(&path)
     {
         let _ = writeln!(f, "[{:?}] {msg}", std::thread::current().id());
         let _ = f.flush();
@@ -277,22 +278,52 @@ pub fn generate_output_filename(
     }
 }
 
+/// 将 base-26 字母字符串解析为索引值 (1-based)。
+/// 例如: "a"→1, "z"→26, "aa"→27, "ab"→28, ...
+fn parse_alpha_base26(s: &str) -> Option<usize> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut result = 0usize;
+    for ch in s.chars() {
+        result = result.checked_mul(26)?;
+        let digit = match ch {
+            'a'..='z' => ch as usize - 'a' as usize + 1,
+            'A'..='Z' => ch as usize - 'A' as usize + 1,
+            _ => return None,
+        };
+        result = result.checked_add(digit)?;
+    }
+    Some(result)
+}
+
+/// 将索引值 (1-based) 格式化为 base-26 字母字符串。
+/// 例如: 1→"a", 26→"z", 27→"aa", 28→"ab", ...
+fn format_alpha_base26(idx: usize, upper: bool) -> String {
+    if idx == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    let mut n = idx;
+    while n > 0 {
+        n -= 1; // 转换为 0-based
+        let ch_idx = n % 26;
+        let ch = if upper {
+            (b'A' + ch_idx as u8) as char
+        } else {
+            (b'a' + ch_idx as u8) as char
+        };
+        result.push(ch);
+        n /= 26;
+    }
+    result.chars().rev().collect()
+}
+
 fn parse_sequence(s: &str, seq: SequenceType) -> Option<usize> {
     match seq {
         SequenceType::Numeric => s.parse::<usize>().ok(),
-        SequenceType::AlphabeticLower => {
-            if s.len() == 1 {
-                s.chars().next()?.to_digit(36).map(|d| d as usize)
-            } else {
-                None // Simplified: only handle single char for now, or expand to base-26
-            }
-        }
-        SequenceType::AlphabeticUpper => {
-            if s.len() == 1 {
-                s.chars().next()?.to_digit(36).map(|d| d as usize)
-            } else {
-                None
-            }
+        SequenceType::AlphabeticLower | SequenceType::AlphabeticUpper => {
+            parse_alpha_base26(s)
         }
     }
 }
@@ -300,14 +331,8 @@ fn parse_sequence(s: &str, seq: SequenceType) -> Option<usize> {
 fn format_sequence(idx: usize, seq: SequenceType) -> String {
     match seq {
         SequenceType::Numeric => idx.to_string(),
-        SequenceType::AlphabeticLower => {
-            let c = std::char::from_u32((b'a' as u32) + (idx - 1) as u32).unwrap_or('?');
-            c.to_string()
-        }
-        SequenceType::AlphabeticUpper => {
-            let c = std::char::from_u32((b'A' as u32) + (idx - 1) as u32).unwrap_or('?');
-            c.to_string()
-        }
+        SequenceType::AlphabeticLower => format_alpha_base26(idx, false),
+        SequenceType::AlphabeticUpper => format_alpha_base26(idx, true),
     }
 }
 

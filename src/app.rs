@@ -17,6 +17,7 @@ use crate::wasapi::{
     capture::{CaptureSource, CaptureStats, WasapiCapture, NamingMode, SequenceType, generate_output_filename, default_output_path},
     devices::{EndpointDevice, EndpointFlow},
     sessions::{AudioSession, SessionState},
+    config_path,
 };
 use crate::dsp::DspSettings;
 
@@ -107,8 +108,7 @@ impl RecorderApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
         install_cjk_font(&cc.egui_ctx);
 
-        let config_path = "config.json";
-        let config = fs::read_to_string(config_path)
+        let config = fs::read_to_string(config_path())
             .ok()
             .and_then(|content| serde_json::from_str::<AppConfig>(&content).ok())
             .unwrap_or_default();
@@ -232,7 +232,7 @@ impl RecorderApp {
         if changed {
             self.config.dsp_settings = settings.clone();
             if let Ok(json) = serde_json::to_string(&self.config) {
-                let _ = fs::write("config.json", json);
+                let _ = fs::write(config_path(), json);
             }
         }
     }
@@ -370,7 +370,7 @@ impl RecorderApp {
 
                 if changed {
                     if let Ok(json) = serde_json::to_string(&self.config) {
-                        let _ = fs::write("config.json", json);
+                        let _ = fs::write(config_path(), json);
                     }
                 }
             });
@@ -601,7 +601,7 @@ impl RecorderApp {
 
                         self.config.last_dir = Some(dir_str);
                         if let Ok(json) = serde_json::to_string(&self.config) {
-                            let _ = fs::write("config.json", json);
+                            let _ = fs::write(config_path(), json);
                         }
         
                         let cap = WasapiCapture::start(source, full_path, self.dsp_settings.clone());

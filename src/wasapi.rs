@@ -10,11 +10,35 @@ pub mod capture;
 pub mod devices;
 pub mod sessions;
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
+use std::fs;
 
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
+
+/// 获取应用数据目录。
+/// Windows 上使用 `%APPDATA%/SystemRecorder`，确保配置和日志不污染工作目录。
+pub fn app_data_dir() -> PathBuf {
+    let base = std::env::var("APPDATA")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = base.join("SystemRecorder");
+    fs::create_dir_all(&dir).ok();
+    dir
+}
+
+/// 获取日志文件路径
+pub fn log_path() -> PathBuf {
+    app_data_dir().join("system-recorder.log")
+}
+
+/// 获取配置文件路径
+pub fn config_path() -> PathBuf {
+    app_data_dir().join("config.json")
+}
 
 /// 在 MTA 工作线程里跑一个闭包。返回闭包的结果。
 ///

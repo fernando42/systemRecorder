@@ -126,7 +126,19 @@ impl DspProcessor {
                 if !self.output_buffers[ch].is_empty() {
                     data[i] = self.output_buffers[ch].remove(0);
                 }
-                // 如果输出缓冲不足，则保留原值（或静音），但由于是录制且延迟固定，通常能填满。
+                // 如果输出缓冲不足，则保留原值（或静音)，但由于是录制且延迟固定，通常能填满。
+            }
+            
+            // 4. 清理缓冲区：防止无限增长，限制最大缓冲区大小
+            // RNNoise 延迟约为 480 采样 (10ms @ 48kHz)，保留 2 倍延迟缓冲即可
+            const MAX_BUFFER_SIZE: usize = 960;
+            for ch in 0..channels {
+                if self.input_buffers[ch].len() > MAX_BUFFER_SIZE {
+                    self.input_buffers[ch].truncate(MAX_BUFFER_SIZE);
+                }
+                if self.output_buffers[ch].len() > MAX_BUFFER_SIZE {
+                    self.output_buffers[ch].truncate(MAX_BUFFER_SIZE);
+                }
             }
         }
 
