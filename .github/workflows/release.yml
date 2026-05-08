@@ -1,0 +1,33 @@
+name: Release EXE
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write # 必须开启，否则无法创建 Release
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      # 自动编译、打包并上传到 GitHub Release
+      - name: Build and Upload Binary
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          # 替换为你在 Cargo.toml 中定义的二进制名字 (通常是 [package] 下的 name)
+          bin: your_project_name 
+          # 指定目标平台为 Windows (64位)
+          target: x86_64-pc-windows-msvc
+          # 自动为文件名添加版本号并压缩成 zip
+          archive: $bin-$tag-$target
+          token: ${{ secrets.GITHUB_TOKEN }}
