@@ -227,6 +227,52 @@ impl RecorderApp {
                 }
             }
         });
+        
+        ui.add_space(8.0);
+        
+        // --- 人声增强设置 ---
+        ui.group(|ui| {
+            ui.label(RichText::new("人声增强").strong().color(Color32::from_rgb(100, 200, 255)));
+            
+            // AGC 设置
+            ui.add_space(4.0);
+            ui.label("自动增益控制 (AGC)");
+            if ui.checkbox(&mut settings.vocal_enhancement.enable_agc, "启用").changed() {
+                changed = true;
+            }
+            if settings.vocal_enhancement.enable_agc {
+                if ui.add(egui::Slider::new(&mut settings.vocal_enhancement.agc_target_rms, 0.1..=0.8).text("目标电平")).changed() {
+                    changed = true;
+                }
+                if ui.add(egui::Slider::new(&mut settings.vocal_enhancement.agc_max_gain_db, 0.0..=30.0).text("最大增益 (dB)")).changed() {
+                    changed = true;
+                }
+                ui.label(RichText::new("自动提升音量到目标电平").small().color(Color32::GRAY));
+            }
+            
+            // 均衡器设置
+            ui.add_space(4.0);
+            ui.label("人声均衡器");
+            if ui.checkbox(&mut settings.vocal_enhancement.enable_eq, "启用").changed() {
+                changed = true;
+            }
+            if settings.vocal_enhancement.enable_eq {
+                ui.label(RichText::new("增强人声频段 (300Hz-3.4kHz)").small().color(Color32::GRAY));
+            }
+            
+            // 限幅器设置
+            ui.add_space(4.0);
+            ui.label("限幅器");
+            if ui.checkbox(&mut settings.vocal_enhancement.enable_limiter, "启用").changed() {
+                changed = true;
+            }
+            if settings.vocal_enhancement.enable_limiter {
+                if ui.add(egui::Slider::new(&mut settings.vocal_enhancement.limiter_threshold_db, -3.0..=0.0).text("阈值 (dBFS)")).changed() {
+                    changed = true;
+                }
+                ui.label(RichText::new("防止增益提升后出现失真").small().color(Color32::GRAY));
+            }
+        });
 
         // 同步回 config 并持久化
         if changed {
